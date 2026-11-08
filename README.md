@@ -3,72 +3,79 @@
 APS360 project: classify transmission-line fault types from short three-phase voltage and current
 waveforms with a 1D CNN, compared against a simple RNN baseline.
 
-This repository holds the data-generation part. MATLAB/Simulink simulates faults on the IEEE 9-bus
-system and writes a labeled waveform dataset. The training code (PyTorch) works on that dataset.
+This repository generates the dataset. MATLAB/Simulink simulates faults on the IEEE 9-bus system and
+writes labeled waveforms. Training (PyTorch) is separate. Decisions and reasons are in
+[PROJECT_LOG.md](PROJECT_LOG.md).
 
 ## Requirements
 
-- MATLAB R2023b (other recent releases likely work but are untested)
+- MATLAB R2023b (other recent releases are untested)
 - Simulink, Simscape, and Simscape Electrical
 
 ## Quick start
 
-1. Get the example model and copy `IEEE9BusSystem.slx` into this folder:
+1. Open the example and copy `IEEE9BusSystem.slx` into this folder:
 
    ```matlab
    openExample("simscapeelectrical/IEEE9BusSystemExample")
    ```
 
-2. From this folder, build the fault model and run the sweep:
+2. Build the fault model and run the sweep:
 
    ```matlab
    buildFaultModel("IEEE9BusSystem.slx", "IEEE9BusFaults.slx")
-   runFaultSweep(22)      % smoke test: two cases per class, a few minutes
+   runFaultSweep(22)      % smoke test, a few minutes
    runFaultSweep(3300)    % full dataset: 300 cases per class, about 7 hours
    ```
 
-   Use a different `OutputFolder` for the smoke test, for example
-   `runFaultSweep(22, OutputFolder="dataset_smoke")`, so it does not collide with the full run.
+   Give the smoke test its own folder, for example `OutputFolder="dataset_smoke"`.
 
 ## Files
 
 | File | Purpose |
 |---|---|
-| `buildFaultModel.m` | Converts the 9-bus example into `IEEE9BusFaults.slx` with switchable faults and relays |
-| `runFaultSweep.m` | Plans fault cases, simulates them, and writes the dataset |
+| `buildFaultModel.m` | Copies the 9-bus example into `IEEE9BusFaults.slx` with a fault site on each line |
+| `runFaultSweep.m` | Plans the cases, simulates them, and writes the dataset |
+| `PROJECT_LOG.md` | Decisions made so far, and why |
 
-## The fault model
-
-`buildFaultModel` edits a copy of the example; the original model is not changed.
-
-- **Fault sites:** each of the six 230 kV lines (4–5, 4–6, 5–7, 6–9, 7–8, 8–9) is replaced by a
-  subsystem in the same place, labeled with the line name plus `Fault site L45` (and so on). It has
-  one connection to each bus, so the top level looks like the original example. Inside, the line is
-  split into a near and a far section. The split point carries a fault made of four variable
-  resistors: phases a, b, c to a star point, and the star point to ground. Which resistors close sets
-  the fault type.
-- **Relays:** inside each fault site, a current sensor and a phase-to-ground voltage sensor sit at the
-  sending end of the line. Their signals are logged as `i_L45`, `v_L45`, and so on.
-- **Fault timing:** one shared signal, `faultActive`, switches from 0 to 1 at `faultStartTime`. It
-  reaches every fault site through a Goto/From tag, so no wires cross the diagram.
-- **Sample time:** 64 samples per 60 Hz cycle (3840 Hz). The example used one sample per cycle.
-- **Load level:** loads A, B, and C are scaled together by one factor.
-
-Fault type, resistance, and start time are Simulink signals, so they change between cases under
-Fast Restart without recompiling. Fault position and load level are compile-time values, so the
-sweep runs cases grouped by those two settings and recompiles once per group.
+`buildFaultModel` does not modify the original example. Each of the six 230 kV lines becomes a
+subsystem in the same place. Inside it, the line is split and a four-resistor fault (phases a, b, c
+and ground) plus a voltage and current relay are attached. See `help runFaultSweep` for options.
 
 ## What each case varies
 
-| Setting | Values (defaults) |
+| Setting | Default |
 |---|---|
-| Fault class | AG, BG, CG, AB, BC, CA, ABG, BCG, CAG, ABC, NF (no fault); equal number of cases per class |
-| Faulted line | One of the six lines, uniform |
-| Fault position | 10%, 30%, 50%, 70%, 90% of the line from the sending bus |
+| Fault class | AG, BG, CG, AB, BC, CA, ABG, BCG, CAG, ABC, NF, equal counts |
+| Faulted line | One of L45, L46, L57, L69, L78, L89 |
+| Fault position | 10%, 30%, 50%, 70%, 90% from the sending bus |
 | Load level | 0.85, 0.925, 1.0, 1.075, 1.15 × nominal |
-| Inception angle | 0–360°, in steps of 5.625° (one sample) |
-| Fault resistance (per phase) | 0.01–20 Ω, log-uniform |
-| Ground resistance (grounded faults) | 0.01–300 Ω, log-uniform |
+| Inception angle | One of 64 points around the cycle |
+| Fault resistance | 0.01–20 Ω, log-uniform (blank for NF) |
+| Ground resistance | 0.01–300 Ω, log-uniform (blank unless the fault includes ground) |
 
-All of these can be changed with name-value options; see `help runFaultSweep`.
+Fault type, resistance, and start time change from case to case without recompiling. Fault position
+and load level are compile-time, so the sweep groups cases by those two and recompiles once per group.
 
+## Dataset
+
+`runFaultSweep` writes to `dataset/` (about 80 MB for 3,300 cases; not stored in this repository):
+
+| File | Contents |
+|---|---|
+| `cases.csv` | Full plan, written once and reused if you resume |
+| `sweep_settings.json` | Settings that plan was drawn with |
+| `index.csv` | One row per finished case: label, settings, and waveform file |
+| `failures.csv` | Cases that errored, only if any |
+| `waveforms/case_NNNNNN.csv` | 192 samples: `time_s`, `Va Vb Vc` (V), `Ia Ib Ic` (A) |
+
+`time_s = 0` is fault inception. The window is 1 cycle before and 2 cycles after, taken from the
+relay at the sending end of the faulted line. Train from `index.csv`. Waveform columns are the model
+inputs; `label` is the target. The other columns are metadata.
+
+## Running the sweep
+
+About 7 s per case, plus about 45 s each time a group recompiles. Stop with Ctrl+C, or by creating an
+empty `STOP` file in the output folder. Run the same command to resume; finished cases are skipped.
+Do not move the output folder while a sweep is running. A folder planned with different settings is
+rejected; use a new `OutputFolder`.
