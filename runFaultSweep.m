@@ -44,7 +44,7 @@ function runFaultSweep(numCases, options)
 %   Example:
 %     buildFaultModel("IEEE9BusSystem.slx", "IEEE9BusFaults.slx")
 %     runFaultSweep(22)      % two cases per class as a smoke test
-%     runFaultSweep(5500)    % full dataset
+%     runFaultSweep(3300)    % full dataset: 300 cases per class
 
     arguments
         numCases (1,1) double {mustBeInteger, mustBePositive}
